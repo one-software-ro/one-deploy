@@ -1,36 +1,40 @@
 #!/usr/bin/env node
-function oneDeploy() {
-	var OneRestService = require(__dirname + '/one-rest');
+
+var OneRestClient = require('one-rest-client');
 	
-	var zipFolder = require('zip-folder');
-	var fs = require('fs-extra');
-	
-	var axios = require('axios').default;
-	var wrapper = require('axios-cookiejar-support').wrapper;
-	var CookieJar = require('tough-cookie').CookieJar;
-	var MemoryCookieStore = require('tough-cookie').MemoryCookieStore;
+var zipFolder = require('zip-folder');
+var fs = require('fs-extra');
 
-	var store = new MemoryCookieStore();
-	const jar = new CookieJar(store);
+var axios = require('axios').default;
+var wrapper = require('axios-cookiejar-support').wrapper;
+var CookieJar = require('tough-cookie').CookieJar;
+var MemoryCookieStore = require('tough-cookie').MemoryCookieStore;
 
-	const client = wrapper(axios.create({ jar }));
+var prompt = require('prompt');
+var colors = require('colors/safe');
 
-	var prompt = require('prompt');
-	var colors = require('colors/safe');
+var store = new MemoryCookieStore();
 
-	const errorCb = (message) => {
-		console.log(colors.red('Aplicatia nu a fost inregistrata'));
-		console.log(colors.red(message));
-		process.exit(1);
-	}
-	
-	const buildPrompt = (name, description) => {
-		return {
-			name: name,
-			description: colors.green(description),
-			required: true
+async function getCookie (cookieName) {
+	let cookies = await store.getAllCookies()
+	for (let ind = 0; ind < cookies.length; ind++) {
+		if (cookies[ind].key === cookieName) {
+			return cookies[ind].value;
 		}
 	}
+	return null;
+}
+
+function buildPrompt (name, description) {
+	return {
+		name: name,
+		description: colors.green(description),
+		required: true
+	}
+}
+
+function oneDeploy() {
+	const client = wrapper(axios.create({ jar: new CookieJar(store) }));
 
 	var instance = buildPrompt('instance', 'ONE instance');
 	
@@ -72,8 +76,8 @@ function oneDeploy() {
 	
 	prompt.get(arrayPrompts, function (err, promptResult) {
 		if (err) {
-			console.log(colors.red('Datele necesare nu au fost furnizate'));
-			return;
+			console.log(colors.red('Required info was not provided'));
+			process.exit(1);
 		}
 	
 		if (!bundleConfigPresent) {
@@ -90,13 +94,13 @@ function oneDeploy() {
 		try {
 			config = JSON.parse(fs.readFileSync('config_web_app.json'));
 		} catch (jsonParseError) {
-			console.log(colors.red('Asigurate ca ./config_web_app.json este valid'));
-			return;
+			console.log(colors.red('Make sure config_web_app.json is valid'));
+			process.exit(1);
 		}
 
 		if (!config.hasOwnProperty('web_app_name') || !config.hasOwnProperty('web_app_path') || !config.hasOwnProperty('instance') || !config.hasOwnProperty('dist_path')) {
-			console.log(colors.red('Asigurate ca fisierul ./config_web_app.json contine urmatoarele proprietati: web_app_name, web_app_path dist_path si instance'));
-			return;
+			console.log(colors.red('Make sure config_web_app.json has the following fields: web_app_name, web_app_path, dist_path and instance'));
+			process.exit(1);
 		}
 
 		var bundleFilesPresent = false;
@@ -107,45 +111,52 @@ function oneDeploy() {
 		}
 
 		if (!bundleFilesPresent) {
-			console.log(colors.red('Asigurate ca index.html este prezent in directorul de build'));
-			return;
+			console.log(colors.red('Make sure index.html is present in your web app\'s build path'));
+			process.exit(1);
 		}
 
-		zipFolder(config.dist_path, './web_app.zip', async function(err) {
+		const zipCb = async function(err) {
 			if (err) {
-				console.log(colors.red('Arhiva nu a fost generata'));
-				return;
+				console.log(colors.red('Failed to build an archive of your web application'));
+				console.log(colors.red('Your web application has not been deployed'));
+				console.error(err)
+				process.exit(1);
 			}
 
-			let restApi = new OneRestService(client, config.instance, {}, store, errorCb);
+			try {
+				let restApi = new OneRestClient(client, config.instance, null, getCookie);
 
-			await restApi.auth(promptResult.username, promptResult.password);
-
-			let result = await restApi.storage(fs.createReadStream('./web_app.zip'));
-
-			let storageId = result[0].id;
-
-			let webApp = {
-				'entity_name': 'web_app',
-				'properties': {
-				   'name': config.web_app_name,
-				   'path': config.web_app_path,
-				   'id_storage_file': storageId
+				await restApi.auth(promptResult.username, promptResult.password);
+	
+				let storageId = await restApi.storage(fs.createReadStream('./web_app.zip'));
+	
+				let webApp = {
+					'entity_name': 'web_app',
+					'properties': {
+					   'name': config.web_app_name,
+					   'path': config.web_app_path,
+					   'id_storage_file': storageId
+					}
+				 };
+	
+				let queryData = await restApi.fetch('FETCH web_app(key) FILTER AND(name == \"' + config.web_app_name + '\", path == \"' + config.web_app_path + '\")');
+	
+				if (queryData !== undefined && queryData !== null && queryData.length > 0) {
+					webApp.properties['key'] = queryData[0]['key'];
+					await restApi.update('web_app', webApp);
+				} else {
+					await restApi.put('web_app', webApp);
 				}
-			 };
-
-			let queryData = await restApi.fetch('FETCH web_app(key) FILTER AND(name == \"' + config.web_app_name + '\", path == \"' + config.web_app_path + '\")');
-
-			if (queryData !== undefined && queryData !== null && queryData.length > 0) {
-				webApp.properties['key'] = queryData[0]['key'];
-				await restApi.update('web_app', webApp);
-			} else {
-				await restApi.put('web_app', webApp);
+	
+				console.log(colors.green('Your web application has been deployed'));
+			} catch(error) {
+				console.log(colors.red('Your web application has not been deployed'));
+				console.error(error)
+				process.exit(1);
 			}
+		};
 
-			console.log(colors.green('Arhiva a fost instalata'));
-		});
-		
+		zipFolder(config.dist_path, './web_app.zip', zipCb);
 	});
 };
 module.exports = oneDeploy;
