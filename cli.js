@@ -1,3 +1,4 @@
 #!/usr/bin/env node
-const oneDeploy = require(__dirname + "/index");
-oneDeploy();
+const oneDeployScript = new URL("index.js", import.meta.url);
+const deployer = await import(oneDeployScript);
+deployer.oneDeploy();

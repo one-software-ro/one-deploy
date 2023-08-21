@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
-var OneRestClient = require('one-rest-client');
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url);
+
+import OneRestClient from 'one-rest-client';
 	
 var zipFolder = require('zip-folder');
 var fs = require('fs-extra');
@@ -33,7 +36,7 @@ function buildPrompt (name, description) {
 	}
 }
 
-function oneDeploy() {
+export function oneDeploy() {
 	const client = wrapper(axios.create({ jar: new CookieJar(store) }));
 
 	var instance = buildPrompt('instance', 'ONE instance');
@@ -159,4 +162,3 @@ function oneDeploy() {
 		zipFolder(config.dist_path, './web_app.zip', zipCb);
 	});
 };
-module.exports = oneDeploy;
